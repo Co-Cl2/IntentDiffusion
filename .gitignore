@@ -1,0 +1,10 @@
+*__pycache__*
+*egg-info*
+*wandb*
+Diffusion-LM/improved-diffusion/diffusion_models/
+Diffusion-LM/improved-diffusion/diffusion_models_1/
+Diffusion-LM/improved-diffusion/generation_outputs/
+Diffusion-LM/improved-diffusion/generation_outputs_1/
+*.log
+*.pth
+Diffusion-LM/datasets/
