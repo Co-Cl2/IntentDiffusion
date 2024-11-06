@@ -52,7 +52,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 from custom_trainer import GPT2LMHeadModelCompress, BERTModelCompress, AutoEncoderWithNoise, GPT2VAE, AR_for_cont,\
-    Classifier_GPT2, Classifier_Times, Classifier_POS, Classifier_Tree, Classifier_Consistency
+    Classifier_GPT2, Classifier_Times, Classifier_POS, Classifier_Tree, Classifier_Consistency, Classifier_Anchor
 
 from improved_diffusion.rounding import rounding_func, load_models, load_tokenizer
 
@@ -325,9 +325,6 @@ def get_corpus_rocstory(data_args):
         print(sentence_lst[:2], sentence_lst[-2:])
         return sentence_lst, {}
 
-
-
-
     elif data_args.experiment.startswith('roc') and data_args.task != 'data_teacher':
         print('loading dataset from ROCStory')
         nlp = English()
@@ -432,7 +429,7 @@ def get_corpus_rocstory(data_args):
         print(sentence_lst[:2])
 
 
-    elif data_args.experiment.startswith('e2e-back'):
+    elif data_args.experiment.startswith('e2e-back'): 
         ordered_ = ['name', 'Type', 'area', 'customer rating', 'near',
                     'family friendly', 'food', 'price']
         full_dict = defaultdict(lambda:Counter())
@@ -481,7 +478,37 @@ def get_corpus_rocstory(data_args):
         for input_ids in vocab_lst:
             counter.update(input_ids)
             # counter.update(src_ids)
+    
+    ################### Load Intent Data ###################
+    elif data_args.experiment.startswith('intent'): 
 
+        print('loading dataset from anchor')
+        sentence_lst = []
+        nlp = English()
+        tokenizer = nlp.tokenizer
+        path = f'{data_args.anchor_data}/train.json'
+        vocab_lst = []
+        with open(path, 'r') as ff:
+            for row in ff:
+                src_lst, word_lst = row["label"], row["text"]
+                # src_lst = ordered_fill(src_lst, 'food')
+                # src_lst = ordered_fill(src_lst, 'price')
+
+                word_lst = [x.text for x in tokenizer(word_lst)]
+                sentence_lst.append((word_lst, src_lst))
+                vocab_lst.append(word_lst)
+
+                # src_lst = ordered_fill(src_lst, 'area')
+                # word_lst = [x.text for x in tokenizer(word_lst)]
+                # src_lst = [x.text for x in tokenizer(src_lst)]
+                # sentence_lst.append((word_lst, src_lst))
+        print(sentence_lst[:2])
+
+        counter = Counter()
+        for input_ids in vocab_lst:
+            counter.update(input_ids)
+            # counter.update(src_ids)
+    
     # get tokenizer.
     if not data_args.experiment.startswith('e2e-back'):
         counter = Counter()
@@ -510,6 +537,10 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    ########### Load Anchor ###########
+    if model_args.anchor_data is not None:
+        anchor_data, _ = get_corpus_rocstory(model_args)
+    
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -893,6 +924,8 @@ def main():
                 model = Classifier_Times(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
+            elif model_args.experiment == 'intent':
+                model = Classifier_Anchor(anchor_data=anchor_data, config=config, diffusion=diffusion,)
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )

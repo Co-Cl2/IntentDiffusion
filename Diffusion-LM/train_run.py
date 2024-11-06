@@ -35,7 +35,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--submit', type=str, default='no', help='')
     parser.add_argument('--use_big', type=str, default='no', help='')
-
+    parser.add_argument('--anchor_data', type=str, default='no', help='')
     parser.add_argument('--app', type=str, default='', help='')
 
 
@@ -83,6 +83,7 @@ if __name__ == '__main__':
     COMMANDLINE = f"python transformers/examples/pytorch/language-modeling/run_clm.py \
             --output_dir={Model_FILE} \
             --model_name_or_path={args.pretrained_model} \
+            --anchor_data={args.anchor_data}\
             --tokenizer_name={args.pretrained_model} \
             --per_device_train_batch_size {args.bsz} \
             --per_device_eval_batch_size {args.bsz} \
