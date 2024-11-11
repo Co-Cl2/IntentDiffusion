@@ -537,7 +537,7 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    ########### Load Anchor ###########
+    ########### Load Anchor ###########:TODO 这个是不对的，还没走tokenizer呢，走完才能进去
     if model_args.anchor_data is not None:
         anchor_data, _ = get_corpus_rocstory(model_args)
     
@@ -628,7 +628,8 @@ def main():
     elif model_args.experiment.startswith('roc') or\
             model_args.experiment.startswith('simple-wiki') or \
             model_args.experiment.startswith('e2e-tgt') or \
-            model_args.experiment.startswith('e2e-back'):
+            model_args.experiment.startswith('e2e-back') or \
+            model_args.experiment.startswith('intent'):
         train_dataset, vocab = get_corpus_rocstory(model_args) # TODO: include validation sets.
         print(len(vocab), 'derived vocabs')
 
@@ -757,7 +758,8 @@ def main():
             model_args.experiment.startswith('pos') or model_args.experiment.startswith('roc') or \
             model_args.experiment.startswith('simple-wiki') or \
             model_args.experiment.startswith('e2e-tgt') or\
-            model_args.experiment.startswith('e2e-back'):
+            model_args.experiment.startswith('e2e-back') or\
+            model_args.experiment.startswith('intent'):
         print('\ninitializing the tokenizer with small vocab\n' + '*'*100)
 
         if model_args.task in ['data_teacher', 'finetune']:
@@ -892,7 +894,7 @@ def main():
                 model = AutoModelForCausalLM.from_config(config)
 
 
-        ############# LOAD MODELS for controllable classifier ##############
+        ############# LOAD MODELS for controllable classifier ############## 这里定义了diffusion，所以这部分应该才是使用的部分
         elif model_args.experiment in ['e2e-back', 'e2e-back_t2', 'e2e-tgt-pos', 'e2e-tgt-tree']:
             import torch
             config.vocab_size = len(tokenizer)
@@ -1388,11 +1390,11 @@ def main():
         def tokenize_function(examples):
             vocab_dict = raw_datasets.vocab
             with CaptureLogger(tok_logger) as cl:
-                if model_args.experiment == 'e2e-back':
+                if model_args.experiment == 'e2e-back': # 这部分相当于是自己完成了tokenizer的功能
                     input_ids = [[0] + [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (seq, _) in examples['text']]
                     src_ids = [ [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (_, seq) in examples['text']]
                     result_dict = {'word_ids': input_ids, 'src_ids':src_ids}
-                elif model_args.experiment == 'e2e-back-gen':
+                elif model_args.experiment == 'e2e-back-gen': # 这部分应该是用不到
                     input_strings = [
                         " ".join(attributes) + tokenizer.bos_token + " ".join(words) + tokenizer.eos_token
                         for (words, attributes) in examples['text']]
@@ -1415,6 +1417,79 @@ def main():
             )
 
         def pad_function(group_lst):
+            if model_args.experiment == 'e2e-back':
+                vocab_dict = raw_datasets.vocab
+                max_length = 64
+                seqlen = 64
+                group_lst['word_ids'] = _collate_batch_helper(group_lst['word_ids'], vocab_dict['PAD'], max_length)
+                max_src_length = max([len(xx) for xx in group_lst['src_ids']])
+                # print(max_src_length, seqlen)
+                max_src_length = min(seqlen, max_src_length)
+                group_lst['src_ids'], group_lst['src_mask'] = _collate_batch_helper(group_lst['src_ids'],
+                                                                                    vocab_dict['PAD'],
+                                                                                    max_src_length,
+                                                                                    return_mask=True)
+
+                group_lst['input_ids'] = [x + y  for (x,y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
+                group_lst['labels'] = [[-100] * len(x) + y for (x, y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
+            elif model_args.experiment == 'e2e-back-gen':
+                group_lst['labels'] = group_lst['input_ids']
+            return group_lst
+
+        # def pad_function2(group_lst):
+        #     vocab_dict = raw_datasets.vocab
+        #
+        #     max_length = 64
+        #     seqlen = 64
+        #     group_lst['word_ids'] = _collate_batch_helper(group_lst['word_ids'], vocab_dict['PAD'], max_length)
+        #     max_src_length = max([len(xx) for xx in group_lst['src_ids']])
+        #     # print(max_src_length, seqlen)
+        #     max_src_length = min(seqlen, max_src_length)
+        #     group_lst['src_ids'], group_lst['src_mask'] = _collate_batch_helper(group_lst['src_ids'],
+        #                                                                         vocab_dict['PAD'],
+        #                                                                         max_src_length,
+        #                                                                         return_mask=True)
+        #
+        #     group_lst['input_ids'] = group_lst['word_ids']
+        #     group_lst['tgt_ids'] = group_lst['src_ids']
+        #     group_lst['labels'] = [[-100] * (len(x) * 2) + y for (x, y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
+        #
+        #     return group_lst
+
+        with training_args.main_process_first(desc="grouping texts together"):
+            lm_datasets = tokenized_datasets.map(
+                pad_function, #if model_args.experiment == 'e2e-back' else pad_function2,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                load_from_cache_file=not data_args.overwrite_cache,
+            )
+    
+    elif model_args.experiment.startswith('intent'): # TODO:设计intent的tokenizer，这代码可太难读了
+        def tokenize_function(examples):
+            vocab_dict = raw_datasets.vocab
+            with CaptureLogger(tok_logger) as cl:
+                if model_args.experiment == 'intent': # 这部分相当于是自己完成了tokenizer的功能，这部分是把(A,B)转化为了 0 A 1 B 1，输入数据仍然是判断前后文的句子对，需要修改
+                    input_ids = [[0] + [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (seq, _) in examples['text']]
+                    src_ids = [ [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (_, seq) in examples['text']]
+                    result_dict = {'word_ids': input_ids, 'src_ids':src_ids}
+            # clm input could be much much longer than block_size
+            if "Token indices sequence length is longer than the" in cl.out:
+                tok_logger.warning(
+                    "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits before being passed to the model."
+                )
+            return result_dict
+
+        with training_args.main_process_first(desc="dataset map tokenization"):
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+
+        def pad_function(group_lst):# TODO PAD方法也得重写
             if model_args.experiment == 'e2e-back':
                 vocab_dict = raw_datasets.vocab
                 max_length = 64
@@ -1654,9 +1729,9 @@ def main():
             labels = labels[:, 1:].reshape(-1)
             preds = preds[:, :-1].reshape(-1)
             return metric.compute(predictions=preds, references=labels)
-
+    # 如果experiment在这些类别中，那么数据已经tokenized，不再需要向trainer提供tokenizer
     trainer_tokenizer = None if ((model_args.experiment in ['pos', 'synth', 'roc', 'simple-wiki', 'e2e-tgt',
-                                                            'e2e-tgt-pos','e2e-tgt-tree', 'e2e-back', 'e2e-back_t2']
+                                                            'e2e-tgt-pos','e2e-tgt-tree', 'e2e-back', 'e2e-back_t2','intent']
                                  or model_args.experiment in ['synth_emb', 'pos_emb', 'roc_emb', 'simple-wiki_emb', 'e2e-tgt_emb'])
                                  and model_args.task not in ['data_teacher', 'finetune']) \
                         else tokenizer

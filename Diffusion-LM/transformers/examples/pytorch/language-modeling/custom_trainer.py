@@ -1584,7 +1584,7 @@ class Classifier_POS(BertPreTrainedModel):
         )
 
 
-class Classifier_GPT2(GPT2PreTrainedModel):
+class Classifier_GPT2(GPT2PreTrainedModel):# 整体位移，预测一致性
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
     def __init__(self, config, diffusion=None):
@@ -1768,7 +1768,7 @@ class Classifier_GPT2(GPT2PreTrainedModel):
         )
 
 
-class Classifier_Consistency(BertPreTrainedModel):
+class Classifier_Consistency(BertPreTrainedModel):# 靠cls判断，按照这个写吧，虽然这个分类器最后没用到，上面那个明白意思也确实有好处
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
     def __init__(self, config, diffusion=None):
@@ -1965,7 +1965,7 @@ class Classifier_Anchor(BertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def forward(
+    def forward( # TODO:这个环境使用的是一个连续的句子，无论训练还是测试都是用token_type_ids来标识X1，X2，我需要的是anchor提供X1，输入作为X2。训练时，X2也是anchor，测试时，X2是randn，并且梯度是需要综合X2和所有anchor的交互结果的，如果成对输入，则只能控制和一个anchor的交互
             self,
             input_ids=None,
             context_ids=None,
@@ -2026,7 +2026,7 @@ class Classifier_Anchor(BertPreTrainedModel):
 
         context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1]
 
-        context_input_embs = self.up_proj(context_input_embs)
+        context_input_embs = self.up_proj(context_input_embs) # TODO:这个地方是线性层和激活函数，需要训练的W1和b1可以在这里训练
 
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)
