@@ -35,7 +35,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--submit', type=str, default='no', help='')
     parser.add_argument('--use_big', type=str, default='no', help='')
-    parser.add_argument('--anchor_data', type=str, default='no', help='')
+    parser.add_argument('--anchor_data', type=str, default=None, help='')
     parser.add_argument('--app', type=str, default='', help='')
 
 

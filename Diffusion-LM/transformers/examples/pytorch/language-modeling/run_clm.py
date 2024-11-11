@@ -510,21 +510,24 @@ def get_corpus_rocstory(data_args):
             # counter.update(src_ids)
     
     # get tokenizer.
-    if not data_args.experiment.startswith('e2e-back'):
+    if not data_args.experiment.startswith('e2e-back') and not data_args.experiment.startswith('intent'):
         counter = Counter()
         for input_ids in sentence_lst:
             counter.update(input_ids)
-
-    vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3}
+    if not data_args.experiment.startswith('intent'):
+        vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3}
+    else:
+        vocab_dict = {'CLS': 0, 'SEQ': 1, 'UNK':2, 'PAD':3}
     for k, v in counter.items():
-        if v > 10:
+        if v > 10: # TODO:出现大于10次的token才会进入词汇表，之后如果在数据量较少的文本上进行训练，那可得注意了，另外现在是从norm扩散，但是其实还是应该把目标领域中的句子扩散几步再去噪比较好
             vocab_dict[k] = len(vocab_dict)
     print(len(counter), len(vocab_dict))
 
     return sentence_lst, vocab_dict
 
 
-def main():
+def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集也是进行预训练的数据集
+
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -537,9 +540,6 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    ########### Load Anchor ###########:TODO 这个是不对的，还没走tokenizer呢，走完才能进去
-    if model_args.anchor_data is not None:
-        anchor_data, _ = get_corpus_rocstory(model_args)
     
     # Setup logging
     logging.basicConfig(
@@ -759,7 +759,7 @@ def main():
             model_args.experiment.startswith('simple-wiki') or \
             model_args.experiment.startswith('e2e-tgt') or\
             model_args.experiment.startswith('e2e-back') or\
-            model_args.experiment.startswith('intent'):
+            model_args.experiment.startswith('intent'):# 前面在get_corpus_rocstory中初步tokenize过了，后续只需要转换UNK和加入开始结束标识符
         print('\ninitializing the tokenizer with small vocab\n' + '*'*100)
 
         if model_args.task in ['data_teacher', 'finetune']:
@@ -895,7 +895,7 @@ def main():
 
 
         ############# LOAD MODELS for controllable classifier ############## 这里定义了diffusion，所以这部分应该才是使用的部分
-        elif model_args.experiment in ['e2e-back', 'e2e-back_t2', 'e2e-tgt-pos', 'e2e-tgt-tree']:
+        elif model_args.experiment in ['e2e-back', 'e2e-back_t2', 'e2e-tgt-pos', 'e2e-tgt-tree','intent']:
             import torch
             config.vocab_size = len(tokenizer)
             print('\n Initializing the model from scratch \n' + '*' * 100)
@@ -927,7 +927,7 @@ def main():
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'intent':
-                model = Classifier_Anchor(anchor_data=anchor_data, config=config, diffusion=diffusion,)
+                model = Classifier_Anchor(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )
@@ -961,6 +961,14 @@ def main():
                 model.transformer.wte.load_state_dict(torch.load(path_save))
                 model.transformer.wte.weight.requires_grad = False
             elif model_args.experiment.startswith('e2e-back') and model_args.learned_emb == 'yes':
+                print('loading the learned embeddings')
+                learned_embeddings = torch.load(path_learned)['word_embedding.weight']
+                model.transformer.wte.weight.data = learned_embeddings.clone()
+                model.transformer.wte.weight.requires_grad = False
+            elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'no':
+                model.transformer.wte.load_state_dict(torch.load(path_save))
+                model.transformer.wte.weight.requires_grad = False
+            elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'yes':
                 print('loading the learned embeddings')
                 learned_embeddings = torch.load(path_learned)['word_embedding.weight']
                 model.transformer.wte.weight.data = learned_embeddings.clone()
@@ -1464,14 +1472,14 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
             )
     
-    elif model_args.experiment.startswith('intent'): # TODO:设计intent的tokenizer，这代码可太难读了
+    elif model_args.experiment.startswith('intent'):
         def tokenize_function(examples):
             vocab_dict = raw_datasets.vocab
             with CaptureLogger(tok_logger) as cl:
-                if model_args.experiment == 'intent': # 这部分相当于是自己完成了tokenizer的功能，这部分是把(A,B)转化为了 0 A 1 B 1，输入数据仍然是判断前后文的句子对，需要修改
-                    input_ids = [[0] + [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (seq, _) in examples['text']]
-                    src_ids = [ [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for (_, seq) in examples['text']]
-                    result_dict = {'word_ids': input_ids, 'src_ids':src_ids}
+                if model_args.experiment == 'intent': # 这部分相当于是自己完成了tokenizer的功能
+                    input_ids = [[0] + [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for seq in examples['text']]
+                    labels = examples['label']
+                    result_dict = {'input_ids': input_ids, 'labels':labels}
             # clm input could be much much longer than block_size
             if "Token indices sequence length is longer than the" in cl.out:
                 tok_logger.warning(
@@ -1489,22 +1497,20 @@ def main():
                 desc="Running tokenizer on dataset",
             )
 
-        def pad_function(group_lst):# TODO PAD方法也得重写
-            if model_args.experiment == 'e2e-back':
+        def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行
+            if model_args.experiment == 'intent':
                 vocab_dict = raw_datasets.vocab
-                max_length = 64
-                seqlen = 64
-                group_lst['word_ids'] = _collate_batch_helper(group_lst['word_ids'], vocab_dict['PAD'], max_length)
-                max_src_length = max([len(xx) for xx in group_lst['src_ids']])
-                # print(max_src_length, seqlen)
-                max_src_length = min(seqlen, max_src_length)
-                group_lst['src_ids'], group_lst['src_mask'] = _collate_batch_helper(group_lst['src_ids'],
-                                                                                    vocab_dict['PAD'],
-                                                                                    max_src_length,
-                                                                                    return_mask=True)
+                max_length = 16 # 64
+                seqlen = 16 # 64
+                group_lst['anchors'] = group_lst['input_ids']
+                group_lst['anchors_labels'] = group_lst['labels']
+                group_lst['input_ids'] = [x + y[...,1:] for x in group_lst['anchors'] for y in group_lst['anchors']]
+                group_lst['input_ids'] = _collate_batch_helper(group_lst['input_ids'], vocab_dict['PAD'], max_length)
 
-                group_lst['input_ids'] = [x + y  for (x,y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
-                group_lst['labels'] = [[-100] * len(x) + y for (x, y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
+                group_lst['labels'] = [int(x == y) for x in group_lst['anchors_labels'] for y in group_lst['anchors_labels']] # 同类为1，异类为0
+
+                group_lst['type_ids'] = [ [0] * len(x) + [1] * (len(y)-1) for x in group_lst['anchors'] for y in group_lst['anchors']]
+                group_lst['type_ids'] = _collate_batch_helper(group_lst['type_ids'], 2, max_length)
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst

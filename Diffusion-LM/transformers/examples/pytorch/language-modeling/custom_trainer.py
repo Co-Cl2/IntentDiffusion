@@ -74,7 +74,7 @@ class Trainer_8dim(Trainer):
 
 
         # Save past state if it exists
-        # TODO: this needs to be fixed and made cleaner later.
+        # this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
             self._past = outputs[self.args.past_index]
 
@@ -1927,19 +1927,22 @@ class Classifier_Consistency(BertPreTrainedModel):# 靠cls判断，按照这个�
             attentions=transformer_outputs.attentions,
         )
 
-class Classifier_Anchor(BertPreTrainedModel):
+class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢，不过先进行一下训练试试，看看能不能正常进行，后续修改测试的代码
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
-    def __init__(self, anchor_data, config, diffusion=None):
+    def __init__(self, config, diffusion=None):
         super().__init__(config)
         self.bert = BertModel(config)
         self.bert.embeddings.word_embeddings = nn.Embedding(config.vocab_size, config.input_emb_dim, )
+
+        ################# W1,b1 ################# 使用了现有的NSP层，可以实现需要的功能
         self.cls = BertOnlyNSPHead(config)
+
         self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(),
                                      nn.Linear(config.input_emb_dim * 4, config.hidden_size))
         
         ################# Dataset Anchor #################
-        self.anchor_data = anchor_data
+        # self.anchor_data = anchor_data 在外面组建为词对
         
         print(diffusion)
         self.diffusion = diffusion
@@ -1965,7 +1968,7 @@ class Classifier_Anchor(BertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def forward( # TODO:这个环境使用的是一个连续的句子，无论训练还是测试都是用token_type_ids来标识X1，X2，我需要的是anchor提供X1，输入作为X2。训练时，X2也是anchor，测试时，X2是randn，并且梯度是需要综合X2和所有anchor的交互结果的，如果成对输入，则只能控制和一个anchor的交互
+    def forward( # 这个环境使用的是一个连续的句子，无论训练还是测试都是用type_ids来标识X1，X2
             self,
             input_ids=None,
             context_ids=None,
@@ -1996,11 +1999,11 @@ class Classifier_Anchor(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if input_ids is None:
+        if input_ids is None: # test，此时input_embs存在，是当前状态，context是用来对比的句子。TODO: 这个逻辑我大概得补充回来，没有测试部分的代码，或者不用这个逻辑，保留在外部组对
             assert context_ids is not None and (mid_ids is not None or input_embs is not None)
             context_embs = self.bert.embeddings.word_embeddings(context_ids)
             context_type_ids = torch.full_like(context_ids, 0)
-        else: # training
+        else: # training? 此时input_ids存在，是用于训练的数据对，自带type_id（所以还是需要输入type_id的），来区分需要被扩散几步的句子和不需要被扩散的句子
             assert type_ids is not None
             context_input_embs = self.bert.embeddings.word_embeddings(input_ids)
             context_input_type_ids = type_ids
@@ -2024,9 +2027,9 @@ class Classifier_Anchor(BertPreTrainedModel):
             t = torch.LongTensor([t]).expand(input_embs.size(0)).to(self.device)
             time_emb = self.time_embeddings(t).unsqueeze(1)
 
-        context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1]
+        context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题
 
-        context_input_embs = self.up_proj(context_input_embs) # TODO:这个地方是线性层和激活函数，需要训练的W1和b1可以在这里训练
+        context_input_embs = self.up_proj(context_input_embs)
 
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)
@@ -2052,6 +2055,7 @@ class Classifier_Anchor(BertPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        # 标签判断和损失的逻辑大抵是没什么问题了
         if t_aware and past_key_values is None:
             hidden_states = transformer_outputs[0][:, 1:, ]
             # print(hidden_states)
@@ -2075,7 +2079,7 @@ class Classifier_Anchor(BertPreTrainedModel):
             loss_fct = CrossEntropyLoss()
             next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1))
 
-        if not return_dict:
+        if not return_dict: # 大概是这个分支永远进不去，所以这个编译上的问题就放这无所谓了
             output = (seq_relationship_scores,) + outputs[2:]
             return ((next_sentence_loss,) + output) if next_sentence_loss is not None else output
 
