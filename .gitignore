@@ -5,6 +5,7 @@ Diffusion-LM/improved-diffusion/diffusion_models/
 Diffusion-LM/improved-diffusion/diffusion_models_1/
 Diffusion-LM/improved-diffusion/generation_outputs/
 Diffusion-LM/improved-diffusion/generation_outputs_1/
+Diffusion-LM/classifier_models/
 *.log
 *.pth
 Diffusion-LM/datasets/
