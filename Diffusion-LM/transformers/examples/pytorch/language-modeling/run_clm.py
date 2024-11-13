@@ -30,9 +30,10 @@ from itertools import chain
 from typing import Optional
 import torch
 import datasets
+import evaluate
 import stanza
 import spacy_stanza
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 
 import transformers
 from transformers import (
@@ -123,6 +124,10 @@ class ModelArguments:
         default='/u/scr/xlisali/e2e_data',
         metadata={"help": "simple wiki path"},
     )
+    anchor_data: Optional[str] = field(
+        default=None,
+        metadata={"help": "anchor data path"},
+    )
 
     reduced_emb: Optional[int] = field(
         default=8,
@@ -139,7 +144,7 @@ class ModelArguments:
     )
 
     n_embd: Optional[int] = field(
-        default=16,
+        default=128, # 16
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
     )
 
@@ -487,21 +492,19 @@ def get_corpus_rocstory(data_args):
         nlp = English()
         tokenizer = nlp.tokenizer
         path = f'{data_args.anchor_data}/train.json'
-        vocab_lst = []
+        vocab_lst = []\
+
         with open(path, 'r') as ff:
-            for row in ff:
-                src_lst, word_lst = row["label"], row["text"]
-                # src_lst = ordered_fill(src_lst, 'food')
-                # src_lst = ordered_fill(src_lst, 'price')
+            data = json.load(ff)
 
-                word_lst = [x.text for x in tokenizer(word_lst)]
-                sentence_lst.append((word_lst, src_lst))
-                vocab_lst.append(word_lst)
-
-                # src_lst = ordered_fill(src_lst, 'area')
-                # word_lst = [x.text for x in tokenizer(word_lst)]
-                # src_lst = [x.text for x in tokenizer(src_lst)]
-                # sentence_lst.append((word_lst, src_lst))
+        for item in data:
+            text = item["text"]
+            label = item["label"]
+            
+            word_lst = [x.text for x in tokenizer(text)]
+            sentence_lst.append([word_lst, label])
+            vocab_lst.append(word_lst)
+        
         print(sentence_lst[:2])
 
         counter = Counter()
@@ -517,7 +520,7 @@ def get_corpus_rocstory(data_args):
     if not data_args.experiment.startswith('intent'):
         vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3}
     else:
-        vocab_dict = {'CLS': 0, 'SEQ': 1, 'UNK':2, 'PAD':3}
+        vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3} # {'CLS': 0, 'SEQ': 1, 'UNK':2, 'PAD':3}
     for k, v in counter.items():
         if v > 10: # TODO:出现大于10次的token才会进入词汇表，之后如果在数据量较少的文本上进行训练，那可得注意了，另外现在是从norm扩散，但是其实还是应该把目标领域中的句子扩散几步再去噪比较好
             vocab_dict[k] = len(vocab_dict)
@@ -650,8 +653,11 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                                                 'right_text':train_dataset[1],
                                                 'mid_text':train_dataset[2],
                                                 'label':train_dataset[3]})
+        elif model_args.experiment.startswith('intent'):
+            train_dataset = list(zip(*train_dataset))
+            train_datasets = Dataset.from_dict({'text': train_dataset[0],'label': train_dataset[1]})
         else:
-            train_datasets = Dataset.from_dict({'text': train_dataset})
+            train_datasets = Dataset.from_dict({'text': train_dataset["text"]})
         raw_datasets = train_datasets.train_test_split(0.01)
         print(raw_datasets)
 
@@ -940,7 +946,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
 
             filename = model_args.init_emb  # '/u/scr/nlp/xlisali/predictability/diffusion_models_v3/diff_e2e-tgt_block_rand16_transformer_lr0.0001_2000_cosine_Lsimple_h128_s2_sd101'
             path_save = '{}/random_emb.torch'.format(filename)
-            path_learned = '{}/ema_0.9999_200000.pt'.format(filename)
+            path_learned = '{}/ema_0.9999_300000.pt'.format(filename) # 200000.pt
             if model_args.experiment == 'e2e-tgt-pos' and model_args.learned_emb == 'no':
                 model.transformer.embeddings.word_embeddings.load_state_dict(torch.load(path_save))
                 model.transformer.embeddings.word_embeddings.weight.requires_grad = False
@@ -966,13 +972,15 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 model.transformer.wte.weight.data = learned_embeddings.clone()
                 model.transformer.wte.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'no':
-                model.transformer.wte.load_state_dict(torch.load(path_save))
-                model.transformer.wte.weight.requires_grad = False
+                model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
+                model.bert.embeddings.word_embeddings.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'yes':
                 print('loading the learned embeddings')
-                learned_embeddings = torch.load(path_learned)['word_embedding.weight']
-                model.transformer.wte.weight.data = learned_embeddings.clone()
-                model.transformer.wte.weight.requires_grad = False
+                learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）
+                model.bert.embeddings.word_embeddings.weight = learned_embeddings
+                model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                
+                
 
 
 
@@ -1015,7 +1023,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 config.input_emb_dim = model_args.n_embd
                 config.train_diff_steps = training_args2['diffusion_steps']
                 model = Classifier_Consistency(config=config, diffusion=diffusion,)
-                path_save = '/u/scr/nlp/xlisali/predictability/diffusion_models_v7/diff_roc_pad_rand128_transformer_lr0.0001_0.0_2000_sqrt_Lsimple_h128_s2_d0.1_sd108_xstart_e2e_long/model750000.pt'
+                path_save = '/u/scr/nlp/xlisali/predictability/diffusion_models_v7/diff_roc_pad_rand128_transformer_lr0.0001_0.0_2000_sqrt_Lsimple_h128_s2_d0.1_sd108_xstart_e2e_long/model750000.pt'# TODO: bert模型的embedding应该从base读取还是从diffusion读取
                 embedding_weight = torch.load(path_save)['word_embedding.weight']
                 print(embedding_weight.shape)
                 model.bert.embeddings.word_embeddings.weight = embedding_weight
@@ -1477,7 +1485,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             vocab_dict = raw_datasets.vocab
             with CaptureLogger(tok_logger) as cl:
                 if model_args.experiment == 'intent': # 这部分相当于是自己完成了tokenizer的功能
-                    input_ids = [[0] + [vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for seq in examples['text']]
+                    input_ids = [[vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for seq in examples['text']]
                     labels = examples['label']
                     result_dict = {'input_ids': input_ids, 'labels':labels}
             # clm input could be much much longer than block_size
@@ -1504,13 +1512,17 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 seqlen = 16 # 64
                 group_lst['anchors'] = group_lst['input_ids']
                 group_lst['anchors_labels'] = group_lst['labels']
-                group_lst['input_ids'] = [x + y[...,1:] for x in group_lst['anchors'] for y in group_lst['anchors']]
+                group_lst['input_ids'] = [ [0] + x + y for x in group_lst['anchors'] for y in group_lst['anchors']]
                 group_lst['input_ids'] = _collate_batch_helper(group_lst['input_ids'], vocab_dict['PAD'], max_length)
 
                 group_lst['labels'] = [int(x == y) for x in group_lst['anchors_labels'] for y in group_lst['anchors_labels']] # 同类为1，异类为0
 
                 group_lst['type_ids'] = [ [0] * len(x) + [1] * (len(y)-1) for x in group_lst['anchors'] for y in group_lst['anchors']]
                 group_lst['type_ids'] = _collate_batch_helper(group_lst['type_ids'], 2, max_length)
+
+                group_lst.pop('anchors', None)
+                group_lst.pop('anchors_labels', None)
+
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst
@@ -1726,7 +1738,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             else:
                 return logits.argmax(dim=-1)
 
-        metric = load_metric("accuracy")
+        metric = evaluate.load("accuracy")
 
         def compute_metrics(eval_preds):
             preds, labels = eval_preds

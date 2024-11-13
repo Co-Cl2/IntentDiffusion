@@ -1939,7 +1939,7 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢�
         self.cls = BertOnlyNSPHead(config)
 
         self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(),
-                                     nn.Linear(config.input_emb_dim * 4, config.hidden_size))
+                                     nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为128
         
         ################# Dataset Anchor #################
         # self.anchor_data = anchor_data 在外面组建为词对
@@ -2029,7 +2029,7 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢�
 
         context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题
 
-        context_input_embs = self.up_proj(context_input_embs)
+        context_input_embs = self.up_proj(context_input_embs) 
 
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)

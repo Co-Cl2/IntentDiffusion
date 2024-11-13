@@ -2,6 +2,9 @@ import sys
 import os
 import argparse
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='training args.')
@@ -51,7 +54,7 @@ if __name__ == '__main__':
             args.experiment == 'e2e-tgt-gen-tree' or  args.experiment == 'e2e-tgt-gen-pos' or args.experiment == 'e2e-back-gen' \
             or args.experiment == 'e2e-tgt-gen-length' or args.experiment == 'e2e-tgt-gen-spans' \
             or args.experiment == 'e2e-back' \
-            or args.experiment == 'simple-wiki' or args.experiment == 'roc':
+            or args.experiment == 'simple-wiki' or args.experiment == 'roc' or args.experiment == 'intent':
 
         if args.dataset_name == 'none':
             Model_FILE = args.experiment + \
