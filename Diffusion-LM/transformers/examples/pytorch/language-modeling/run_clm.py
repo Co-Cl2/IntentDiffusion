@@ -744,7 +744,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
     if model_args.config_name:
         config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
     elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs)
+        config = AutoConfig.from_pretrained(model_args.model_name_or_path, **config_kwargs) # 由--pretrained_model bert-base-uncased定义config
     else:
         config = CONFIG_MAPPING[model_args.model_type]()
         logger.warning("You are instantiating a new config instance from scratch.")
@@ -927,6 +927,8 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
 
             config.input_emb_dim = model_args.n_embd
             config.train_diff_steps = training_args2['diffusion_steps']
+            ########################## 修改配置为3（x1，x2，PAD） ##########################
+            config.type_vocab_size = 3
 
             if model_args.experiment == 'e2e-back_t2':
                 model = Classifier_Times(config=config, diffusion=diffusion,)
@@ -1508,8 +1510,8 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
         def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行
             if model_args.experiment == 'intent':
                 vocab_dict = raw_datasets.vocab
-                max_length = 16 # 64
-                seqlen = 16 # 64
+                max_length = 64 # 64
+                seqlen = 64 # 64
                 group_lst['anchors'] = group_lst['input_ids']
                 group_lst['anchors_labels'] = group_lst['labels']
                 group_lst['input_ids'] = [ [0] + x + y for x in group_lst['anchors'] for y in group_lst['anchors']]

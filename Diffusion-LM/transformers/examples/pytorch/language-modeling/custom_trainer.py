@@ -1927,7 +1927,7 @@ class Classifier_Consistency(BertPreTrainedModel):# 靠cls判断，按照这个�
             attentions=transformer_outputs.attentions,
         )
 
-class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢，不过先进行一下训练试试，看看能不能正常进行，后续修改测试的代码
+class Classifier_Anchor(BertPreTrainedModel):# TODO:diffusion长度仅仅是一个句子长度，bert需要两倍的句子长度来分类，这两个无法保持一致 1.bert长度无需定义 2.diffusion长度为16?如何只扩散非anchor部分再拼接，而不是全部扩散再覆盖
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
     def __init__(self, config, diffusion=None):
@@ -2027,13 +2027,13 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢�
             t = torch.LongTensor([t]).expand(input_embs.size(0)).to(self.device)
             time_emb = self.time_embeddings(t).unsqueeze(1)
 
-        context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题
+        context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题，context_input_type_ids == 1的是anchor
 
         context_input_embs = self.up_proj(context_input_embs) 
-
+        
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)
-        if t_aware:
+        if t_aware:# TODO：这里需要注意
             # print(time_emb.shape, input_embs.shape, input_ids.shape, type_ids.shape)
             input_embs = torch.cat([time_emb, input_embs], dim=1)
             t_type_ids = torch.LongTensor([0]).unsqueeze(0).expand(input_embs.shape[0], -1).to(self.device)
@@ -2044,7 +2044,7 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:config还得看看是啥呢�
         transformer_outputs = self.bert(
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
+            token_type_ids=token_type_ids,# 是这个的问题，已解决
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=input_embs,
