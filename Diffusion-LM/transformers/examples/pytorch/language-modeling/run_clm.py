@@ -765,7 +765,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             model_args.experiment.startswith('simple-wiki') or \
             model_args.experiment.startswith('e2e-tgt') or\
             model_args.experiment.startswith('e2e-back') or\
-            model_args.experiment.startswith('intent'):# 前面在get_corpus_rocstory中初步tokenize过了，后续只需要转换UNK和加入开始结束标识符
+            model_args.experiment.startswith('intent'):# 前面在get_corpus_rocstory中初步tokenize过了，后续只需要转换UNK和加入开始结束标识符 TODO：所以，我们到底应该像e2e-back一样自己实现tokenizer，还是直接采用uncase-bert-base的全套内容（tokenizer，embedding，以及不变的参数）我感觉是后者，但是需要重新写代码
         print('\ninitializing the tokenizer with small vocab\n' + '*'*100)
 
         if model_args.task in ['data_teacher', 'finetune']:
@@ -935,7 +935,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'intent':
-                model = Classifier_Anchor(config=config, diffusion=diffusion,)
+                model = Classifier_Anchor(config=config, diffusion=None,)# TODO：训练过程中需要扩散吗
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )
@@ -974,13 +974,15 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 model.transformer.wte.weight.data = learned_embeddings.clone()
                 model.transformer.wte.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'no':
-                model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
-                model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                # model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
+                # model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                pass
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'yes':
                 print('loading the learned embeddings')
-                learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）
-                model.bert.embeddings.word_embeddings.weight = learned_embeddings
-                model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                # learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）TODO：需要使用新扩散的模型的词嵌入吗
+                # model.bert.embeddings.word_embeddings.weight = learned_embeddings
+                # model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                pass
                 
                 
 
@@ -1524,7 +1526,6 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
 
                 group_lst.pop('anchors', None)
                 group_lst.pop('anchors_labels', None)
-
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst

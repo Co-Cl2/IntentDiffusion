@@ -1927,7 +1927,7 @@ class Classifier_Consistency(BertPreTrainedModel):# 靠cls判断，按照这个�
             attentions=transformer_outputs.attentions,
         )
 
-class Classifier_Anchor(BertPreTrainedModel):# TODO:diffusion长度仅仅是一个句子长度，bert需要两倍的句子长度来分类，这两个无法保持一致 1.bert长度无需定义 2.diffusion长度为16?如何只扩散非anchor部分再拼接，而不是全部扩散再覆盖
+class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句子长度，bert需要两倍的句子长度来分类，这两个无法保持一致 1.bert长度无需定义 2.diffusion长度也无所谓
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
     def __init__(self, config, diffusion=None):
@@ -1941,8 +1941,8 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:diffusion长度仅仅是一�
         self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(),
                                      nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为128
         
-        ################# Dataset Anchor #################
-        # self.anchor_data = anchor_data 在外面组建为词对
+        ################# 评估模式 #################
+        self.bert.eval() # TODO：bert参数需要更新吗
         
         print(diffusion)
         self.diffusion = diffusion
@@ -2033,7 +2033,7 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:diffusion长度仅仅是一�
         
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)
-        if t_aware:# TODO：这里需要注意
+        if t_aware:
             # print(time_emb.shape, input_embs.shape, input_ids.shape, type_ids.shape)
             input_embs = torch.cat([time_emb, input_embs], dim=1)
             t_type_ids = torch.LongTensor([0]).unsqueeze(0).expand(input_embs.shape[0], -1).to(self.device)
@@ -2077,7 +2077,7 @@ class Classifier_Anchor(BertPreTrainedModel):# TODO:diffusion长度仅仅是一�
         # print(seq_relationship_scores.shape)
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1))
+            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
 
         if not return_dict: # 大概是这个分支永远进不去，所以这个编译上的问题就放这无所谓了
             output = (seq_relationship_scores,) + outputs[2:]
