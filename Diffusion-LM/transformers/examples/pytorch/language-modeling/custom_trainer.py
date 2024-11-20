@@ -1942,7 +1942,7 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
                                      nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为128
         
         ################# 评估模式 #################
-        self.bert.eval() # TODO：bert参数需要更新吗
+        # self.bert.eval() # TODO：bert参数需要更新吗
         
         print(diffusion)
         self.diffusion = diffusion

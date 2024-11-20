@@ -488,7 +488,8 @@ def get_corpus_rocstory(data_args):
     elif data_args.experiment.startswith('intent'): 
 
         print('loading dataset from anchor')
-        sentence_lst = []
+        train_lst = []
+        test_lst = []
         nlp = English()
         tokenizer = nlp.tokenizer
         path = f'{data_args.anchor_data}/train.json'
@@ -502,10 +503,23 @@ def get_corpus_rocstory(data_args):
             label = item["label"]
             
             word_lst = [x.text for x in tokenizer(text)]
-            sentence_lst.append([word_lst, label])
+            train_lst.append([word_lst, label])
             vocab_lst.append(word_lst)
         
-        print(sentence_lst[:2])
+        print(train_lst[:2])
+
+        path = f'{data_args.anchor_data}/test.json'
+
+        with open(path, 'r') as ff:
+            data = json.load(ff)
+
+        for item in data:
+            text = item["text"]
+            label = item["label"]
+            
+            word_lst = [x.text for x in tokenizer(text)]
+            test_lst.append([word_lst, label])
+            vocab_lst.append(word_lst)
 
         counter = Counter()
         for input_ids in vocab_lst:
@@ -522,11 +536,11 @@ def get_corpus_rocstory(data_args):
     else:
         vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3} # {'CLS': 0, 'SEQ': 1, 'UNK':2, 'PAD':3}
     for k, v in counter.items():
-        if v > 10: # TODO:出现大于10次的token才会进入词汇表，之后如果在数据量较少的文本上进行训练，那可得注意了，另外现在是从norm扩散，但是其实还是应该把目标领域中的句子扩散几步再去噪比较好
+        if v > 0: # TODO:出现大于10次的token才会进入词汇表，之后如果在数据量较少的文本上进行训练，那可得注意了，另外现在是从norm扩散，但是其实还是应该把目标领域中的句子扩散几步再去噪比较好
             vocab_dict[k] = len(vocab_dict)
     print(len(counter), len(vocab_dict))
 
-    return sentence_lst, vocab_dict
+    return train_lst, test_lst, vocab_dict
 
 
 def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集也是进行预训练的数据集
@@ -633,7 +647,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             model_args.experiment.startswith('e2e-tgt') or \
             model_args.experiment.startswith('e2e-back') or \
             model_args.experiment.startswith('intent'):
-        train_dataset, vocab = get_corpus_rocstory(model_args) # TODO: include validation sets.
+        train_dataset, test_dataset, vocab = get_corpus_rocstory(model_args)
         print(len(vocab), 'derived vocabs')
 
         if model_args.experiment.startswith('roc'):
@@ -656,9 +670,11 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
         elif model_args.experiment.startswith('intent'):
             train_dataset = list(zip(*train_dataset))
             train_datasets = Dataset.from_dict({'text': train_dataset[0],'label': train_dataset[1]})
+            test_dataset = list(zip(*test_dataset)) 
+            test_datasets = Dataset.from_dict({'text': test_dataset[0][:50],'label': test_dataset[1][:50]})# TODO: 暂时如此，验证集是测试集中选出50条自组队
         else:
             train_datasets = Dataset.from_dict({'text': train_dataset["text"]})
-        raw_datasets = train_datasets.train_test_split(0.01)
+        raw_datasets = datasets.DatasetDict({'train': train_datasets, 'test': test_datasets})
         print(raw_datasets)
 
         if model_args.experiment in ['e2e-tgt-pos', 'e2e-tgt-gen-pos']:
@@ -935,7 +951,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'intent':
-                model = Classifier_Anchor(config=config, diffusion=None,)# TODO：训练过程中需要扩散吗
+                model = Classifier_Anchor(config=config, diffusion=diffusion,)# TODO：训练过程中需要扩散吗
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )
@@ -974,15 +990,13 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 model.transformer.wte.weight.data = learned_embeddings.clone()
                 model.transformer.wte.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'no':
-                # model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
-                # model.bert.embeddings.word_embeddings.weight.requires_grad = False
-                pass
+                model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
+                model.bert.embeddings.word_embeddings.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'yes':
                 print('loading the learned embeddings')
-                # learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）TODO：需要使用新扩散的模型的词嵌入吗
-                # model.bert.embeddings.word_embeddings.weight = learned_embeddings
-                # model.bert.embeddings.word_embeddings.weight.requires_grad = False
-                pass
+                learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）TODO：需要使用新扩散的模型的词嵌入吗
+                model.bert.embeddings.word_embeddings.weight = learned_embeddings
+                model.bert.embeddings.word_embeddings.weight.requires_grad = False
                 
                 
 
@@ -1503,20 +1517,21 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                num_proc=1,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
-
-        def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行
+        def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行 TODO：损失函数的公式究竟是怎么实现的，要不要问一下写这篇论文的学长
             if model_args.experiment == 'intent':
                 vocab_dict = raw_datasets.vocab
                 max_length = 64 # 64
                 seqlen = 64 # 64
                 group_lst['anchors'] = group_lst['input_ids']
                 group_lst['anchors_labels'] = group_lst['labels']
+                
                 group_lst['input_ids'] = [ [0] + x + y for x in group_lst['anchors'] for y in group_lst['anchors']]
+                
                 group_lst['input_ids'] = _collate_batch_helper(group_lst['input_ids'], vocab_dict['PAD'], max_length)
 
                 group_lst['labels'] = [int(x == y) for x in group_lst['anchors_labels'] for y in group_lst['anchors_labels']] # 同类为1，异类为0
@@ -1526,6 +1541,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
 
                 group_lst.pop('anchors', None)
                 group_lst.pop('anchors_labels', None)
+
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst
@@ -1554,7 +1570,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             lm_datasets = tokenized_datasets.map(
                 pad_function, #if model_args.experiment == 'e2e-back' else pad_function2,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                num_proc=1,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
 
