@@ -490,8 +490,7 @@ def get_corpus_rocstory(data_args):
         print('loading dataset from anchor')
         train_lst = []
         test_lst = []
-        nlp = English()
-        tokenizer = nlp.tokenizer
+
         path = f'{data_args.anchor_data}/train.json'
         vocab_lst = []\
 
@@ -502,9 +501,7 @@ def get_corpus_rocstory(data_args):
             text = item["text"]
             label = item["label"]
             
-            word_lst = [x.text for x in tokenizer(text)]
-            train_lst.append([word_lst, label])
-            vocab_lst.append(word_lst)
+            train_lst.append([text, label])
         
         print(train_lst[:2])
 
@@ -514,33 +511,20 @@ def get_corpus_rocstory(data_args):
             data = json.load(ff)
 
         for item in data:
+
             text = item["text"]
             label = item["label"]
             
-            word_lst = [x.text for x in tokenizer(text)]
-            test_lst.append([word_lst, label])
-            vocab_lst.append(word_lst)
+            test_lst.append([text, label])
+        
+        input_train = [ [ f"{x[0]} [SEP] {y[0]}" , int(x[1] == y[1]), [0] * len(x) + [1] * (len(y)-1)] for x in train_lst for y in train_lst] # 同类为1，异类为0
 
-        counter = Counter()
-        for input_ids in vocab_lst:
-            counter.update(input_ids)
-            # counter.update(src_ids)
+        input_test = [ [ f"{x[0]} [SEP] {y[0]}" , int(x[1] == y[1]), [0] * len(x) + [1] * (len(y)-1)] for x in train_lst for y in test_lst] # 同类为1，异类为0
+
     
-    # get tokenizer.
-    if not data_args.experiment.startswith('e2e-back') and not data_args.experiment.startswith('intent'):
-        counter = Counter()
-        for input_ids in sentence_lst:
-            counter.update(input_ids)
-    if not data_args.experiment.startswith('intent'):
-        vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3}
-    else:
-        vocab_dict = {'START': 0, 'END': 1, 'UNK':2, 'PAD':3} # {'CLS': 0, 'SEQ': 1, 'UNK':2, 'PAD':3}
-    for k, v in counter.items():
-        if v > 0: # TODO:出现大于10次的token才会进入词汇表，之后如果在数据量较少的文本上进行训练，那可得注意了，另外现在是从norm扩散，但是其实还是应该把目标领域中的句子扩散几步再去噪比较好
-            vocab_dict[k] = len(vocab_dict)
-    print(len(counter), len(vocab_dict))
+    vocab_dict = None
 
-    return train_lst, test_lst, vocab_dict
+    return input_train, input_test, vocab_dict
 
 
 def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集也是进行预训练的数据集
@@ -648,7 +632,6 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             model_args.experiment.startswith('e2e-back') or \
             model_args.experiment.startswith('intent'):
         train_dataset, test_dataset, vocab = get_corpus_rocstory(model_args)
-        print(len(vocab), 'derived vocabs')
 
         if model_args.experiment.startswith('roc'):
             tokenizer = load_tokenizer('roc', 'random',
@@ -669,9 +652,9 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                                                 'label':train_dataset[3]})
         elif model_args.experiment.startswith('intent'):
             train_dataset = list(zip(*train_dataset))
-            train_datasets = Dataset.from_dict({'text': train_dataset[0],'label': train_dataset[1]})
+            train_datasets = Dataset.from_dict({'text': train_dataset[0],'label': train_dataset[1],'type_id':train_dataset[2]})
             test_dataset = list(zip(*test_dataset)) 
-            test_datasets = Dataset.from_dict({'text': test_dataset[0][:50],'label': test_dataset[1][:50]})# TODO: 暂时如此，验证集是测试集中选出50条自组队
+            test_datasets = Dataset.from_dict({'text': test_dataset[0][:50],'label': test_dataset[1][:50],'type_id':train_dataset[2][:50]})# TODO: 暂时如此，验证集是测试集中选出50条自组队
         else:
             train_datasets = Dataset.from_dict({'text': train_dataset["text"]})
         raw_datasets = datasets.DatasetDict({'train': train_datasets, 'test': test_datasets})
@@ -689,7 +672,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             parser = benepar.Parser("benepar_en3")
             tree_vocab = parser._parser.config["label_vocab"]
 
-        raw_datasets.vocab = vocab
+        # raw_datasets.vocab = vocab
         raw_datasets['validation'] = raw_datasets['test']
 
     elif data_args.dataset_name is not None:
@@ -784,7 +767,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             model_args.experiment.startswith('intent'):# 前面在get_corpus_rocstory中初步tokenize过了，后续只需要转换UNK和加入开始结束标识符 TODO：所以，我们到底应该像e2e-back一样自己实现tokenizer，还是直接采用uncase-bert-base的全套内容（tokenizer，embedding，以及不变的参数）我感觉是后者，但是需要重新写代码
         print('\ninitializing the tokenizer with small vocab\n' + '*'*100)
 
-        if model_args.task in ['data_teacher', 'finetune']:
+        if model_args.task in ['data_teacher', 'finetune'] or model_args.experiment.startswith('intent'):
             print('loading from pretrained models tokenizer')
             tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, **tokenizer_kwargs)
             print(type(tokenizer))
@@ -798,7 +781,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             elif model_args.experiment == 'e2e-tgt-gen-length':
                 tokenizer.add_tokens([str(xx) for xx in range(64)])
                 tokenizer.add_special_tokens({"pad_token": "<PAD>"})
-            elif model_args.experiment == 'e2e-tgt' and model_args.task == 'finetune':
+            elif model_args.experiment == 'e2e-tgt' and model_args.task == 'finetune' or model_args.experiment.startswith('intent'):
                 tokenizer.add_tokens(['UNK'])
                 tokenizer.add_special_tokens({"pad_token": "<PAD>"})
             else:
@@ -951,7 +934,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'intent':
-                model = Classifier_Anchor(config=config, diffusion=diffusion,)# TODO：训练过程中需要扩散吗
+                model = Classifier_Anchor(config=config, diffusion=None,)# TODO：训练过程中需要扩散吗
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )
@@ -990,12 +973,13 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 model.transformer.wte.weight.data = learned_embeddings.clone()
                 model.transformer.wte.weight.requires_grad = False
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'no':
-                model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
-                model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                # model.bert.embeddings.word_embeddings.load_state_dict(torch.load(path_save)) # 没有学习过的embedding（从配置文件读取）
+                # model.bert.embeddings.word_embeddings.weight.requires_grad = False
+                pass
             elif model_args.experiment.startswith('intent') and model_args.learned_emb == 'yes':
                 print('loading the learned embeddings')
-                learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）TODO：需要使用新扩散的模型的词嵌入吗
-                model.bert.embeddings.word_embeddings.weight = learned_embeddings
+                # learned_embeddings = torch.load(path_learned)['word_embedding.weight'] # 学习过的embedding（从模型参数读取）TODO：需要使用新扩散的模型的词嵌入吗
+                # model.bert.embeddings.word_embeddings.weight = learned_embeddings
                 model.bert.embeddings.word_embeddings.weight.requires_grad = False
                 
                 
@@ -1500,12 +1484,19 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
     
     elif model_args.experiment.startswith('intent'):
         def tokenize_function(examples):
-            vocab_dict = raw_datasets.vocab
             with CaptureLogger(tok_logger) as cl:
-                if model_args.experiment == 'intent': # 这部分相当于是自己完成了tokenizer的功能
-                    input_ids = [[vocab_dict.get(x, vocab_dict['UNK']) for x in seq] + [1] for seq in examples['text']]
+                if model_args.experiment == 'intent': # 调用tokenizer，同时完成tokenize和padding
+                    max_length = 128 # 64
+                    input_ids = tokenizer(examples['text'], padding="max_length", truncation=True, max_length=max_length, return_tensors="pt")['input_ids'].squeeze()
+                    sep1_index = torch.where(input_ids == 102)[0][0]
+                    sep2_index = torch.where(input_ids == 102)[0][1]
                     labels = examples['label']
-                    result_dict = {'input_ids': input_ids, 'labels':labels}
+                    # TODO: 该好好问问怎么调试了
+                    type_ids = [0] * len(input_ids)
+                    type_ids[sep1_index.item():] = [1] * (len(type_ids) - sep1_index.item())
+                    type_ids[sep2_index.item():] = [2] * (len(type_ids) - sep2_index.item())
+                    print({'input_ids': input_ids, 'labels':labels, 'type_ids':type_ids})
+                    result_dict = {'input_ids': input_ids, 'labels':labels, 'type_ids':type_ids} 
             # clm input could be much much longer than block_size
             if "Token indices sequence length is longer than the" in cl.out:
                 tok_logger.warning(
@@ -1514,38 +1505,27 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             return result_dict
 
         with training_args.main_process_first(desc="dataset map tokenization"):
-            tokenized_datasets = raw_datasets.map(
+            lm_datasets = raw_datasets.map(
                 tokenize_function,
-                batched=True,
+                batched=False,# TODO: 后面看看type_id怎么整
                 num_proc=1,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
-        def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行 TODO：损失函数的公式究竟是怎么实现的，要不要问一下写这篇论文的学长
+            print("########################################")
+            print(lm_datasets['train'][:5])
+            print("########################################")
+        """def pad_function(group_lst):# TODO：损失函数的公式究竟是怎么实现的，要不要问一下写这篇论文的学长
             if model_args.experiment == 'intent':
                 vocab_dict = raw_datasets.vocab
                 max_length = 64 # 64
-                seqlen = 64 # 64
-                group_lst['anchors'] = group_lst['input_ids']
-                group_lst['anchors_labels'] = group_lst['labels']
-                
-                group_lst['input_ids'] = [ [0] + x + y for x in group_lst['anchors'] for y in group_lst['anchors']]
-                
-                group_lst['input_ids'] = _collate_batch_helper(group_lst['input_ids'], vocab_dict['PAD'], max_length)
-
-                group_lst['labels'] = [int(x == y) for x in group_lst['anchors_labels'] for y in group_lst['anchors_labels']] # 同类为1，异类为0
-
-                group_lst['type_ids'] = [ [0] * len(x) + [1] * (len(y)-1) for x in group_lst['anchors'] for y in group_lst['anchors']]
-                group_lst['type_ids'] = _collate_batch_helper(group_lst['type_ids'], 2, max_length)
-
-                group_lst.pop('anchors', None)
-                group_lst.pop('anchors_labels', None)
+                  
 
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst
-
+    
         # def pad_function2(group_lst):
         #     vocab_dict = raw_datasets.vocab
         #
@@ -1572,7 +1552,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 batched=True,
                 num_proc=1,
                 load_from_cache_file=not data_args.overwrite_cache,
-            )
+            )"""
 
     elif model_args.experiment.startswith('pos'):
         def tokenize_function(examples):
@@ -1778,7 +1758,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=trainer_tokenizer,
+        tokenizer=trainer_tokenizer, # TODO: 在trainer中指定tokenizer,如何保证输出inputs_id，并且不tokenize label？如何加入type_ids？（我好像还是在padding里组队的） 所以还是得自己写，只不过要调用现成的tokenizer
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
         # compute_metrics=compute_metrics if training_args.do_eval else None,

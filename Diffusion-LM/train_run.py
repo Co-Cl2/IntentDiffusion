@@ -2,8 +2,9 @@ import sys
 import os
 import argparse
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
 
 if __name__ == '__main__':
 

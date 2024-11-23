@@ -1933,16 +1933,18 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
     def __init__(self, config, diffusion=None):
         super().__init__(config)
         self.bert = BertModel(config)
-        self.bert.embeddings.word_embeddings = nn.Embedding(config.vocab_size, config.input_emb_dim, )
+        # self.bert.embeddings.word_embeddings = nn.Embedding(config.vocab_size, config.input_emb_dim, )
 
         ################# W1,b1 ################# 使用了现有的NSP层，可以实现需要的功能
         self.cls = BertOnlyNSPHead(config)
+        ################# label-smooth ################# 标签平滑
+        self.epsilon = 0.2
 
-        self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(),
-                                     nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为128
+        # 下面的应该不需要了，我们不改变词嵌入的维度
+        # self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(), nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为768
         
         ################# 评估模式 #################
-        # self.bert.eval() # TODO：bert参数需要更新吗
+        # self.bert.eval() # TODO：bert参数需要更新吗，可以试试
         
         print(diffusion)
         self.diffusion = diffusion
@@ -1968,6 +1970,14 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
+    def loss_fct(self, pre, label):
+        labels = [ [1-self.epsilon, self.epsilon] if x == 1 else [self.epsilon, 1-self.epsilon] for x in label ]
+        labels = torch.tensor(labels)
+        labels = labels.to(pre.device)
+        loss = F.kl_div(torch.log(labels), torch.softmax(pre, dim=-1), reduction='mean')
+        # print(torch.log(labels), torch.softmax(pre, dim=-1),loss)
+        return loss
+    
     def forward( # 这个环境使用的是一个连续的句子，无论训练还是测试都是用type_ids来标识X1，X2
             self,
             input_ids=None,
@@ -2027,9 +2037,9 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
             t = torch.LongTensor([t]).expand(input_embs.size(0)).to(self.device)
             time_emb = self.time_embeddings(t).unsqueeze(1)
 
-        context_input_embs[context_input_type_ids == 1] = input_embs[context_input_type_ids == 1] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题，context_input_type_ids == 1的是anchor
+        context_input_embs[context_input_type_ids == 0] = input_embs[context_input_type_ids == 0] # 测试时生成的句子会重新和anchor组合重新padding，不用担心句子长度多样性的问题，context_input_type_ids == 1的是anchor
 
-        context_input_embs = self.up_proj(context_input_embs) 
+        # context_input_embs = self.up_proj(context_input_embs) 
         
         input_embs = context_input_embs #torch.cat([context_embs, context_input_embs], dim=1)
         # token_type_ids = torch.cat([context_type_ids, input_type_ids], dim=1)
@@ -2071,13 +2081,12 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
         pooled_output = transformer_outputs[1]
 
         seq_relationship_scores = self.cls(pooled_output)
-
         next_sentence_loss = None
         # print(labels)
         # print(seq_relationship_scores.shape)
         if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
+            # TODO：修改损失函数
+            next_sentence_loss = self.loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
 
         if not return_dict: # 大概是这个分支永远进不去，所以这个编译上的问题就放这无所谓了
             output = (seq_relationship_scores,) + outputs[2:]
