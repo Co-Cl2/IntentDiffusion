@@ -1554,26 +1554,6 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 group_lst['labels'] = group_lst['input_ids']
             return group_lst
 
-        # def pad_function2(group_lst):
-        #     vocab_dict = raw_datasets.vocab
-        #
-        #     max_length = 64
-        #     seqlen = 64
-        #     group_lst['word_ids'] = _collate_batch_helper(group_lst['word_ids'], vocab_dict['PAD'], max_length)
-        #     max_src_length = max([len(xx) for xx in group_lst['src_ids']])
-        #     # print(max_src_length, seqlen)
-        #     max_src_length = min(seqlen, max_src_length)
-        #     group_lst['src_ids'], group_lst['src_mask'] = _collate_batch_helper(group_lst['src_ids'],
-        #                                                                         vocab_dict['PAD'],
-        #                                                                         max_src_length,
-        #                                                                         return_mask=True)
-        #
-        #     group_lst['input_ids'] = group_lst['word_ids']
-        #     group_lst['tgt_ids'] = group_lst['src_ids']
-        #     group_lst['labels'] = [[-100] * (len(x) * 2) + y for (x, y) in zip(group_lst['word_ids'], group_lst['src_ids'])]
-        #
-        #     return group_lst
-
         with training_args.main_process_first(desc="grouping texts together"):
             lm_datasets = tokenized_datasets.map(
                 pad_function, #if model_args.experiment == 'e2e-back' else pad_function2,
@@ -1768,7 +1748,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
 
         metric = evaluate.load("accuracy")
 
-        def compute_metrics(eval_preds):
+        def compute_metrics(eval_preds):# TODO: 按照论文中的方式评估
             preds, labels = eval_preds
             # preds have the same shape as the labels, after the argmax(-1) has been calculated
             # by preprocess_logits_for_metrics but we need to shift the labels
@@ -1790,7 +1770,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
         tokenizer=trainer_tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
-        # compute_metrics=compute_metrics if training_args.do_eval else None,
+        compute_metrics=compute_metrics if training_args.do_eval else None,
         # preprocess_logits_for_metrics=preprocess_logits_for_metrics if training_args.do_eval else None,
     )
 

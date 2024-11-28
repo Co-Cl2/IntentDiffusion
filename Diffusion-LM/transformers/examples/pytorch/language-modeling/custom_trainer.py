@@ -1976,7 +1976,6 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
         # print(torch.log(labels), torch.softmax(pre, dim=-1),loss)
         return loss
     
-
     def forward( # 这个环境使用的是一个连续的句子，无论训练还是测试都是用type_ids来标识X1，X2
             self,
             input_ids=None,
@@ -2019,7 +2018,9 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
 
             input_embs = context_input_embs.clone()
 
-        
+        # 还原input_ids的非anchor部分
+        test_ids = input_ids[context_input_type_ids == 0]
+
         if self.diffusion is not None: # training
             if self.train_diff_steps > 0:
                 # sample t
@@ -2053,7 +2054,7 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
         transformer_outputs = self.bert(
             past_key_values=past_key_values,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,# 是这个的问题，已解决
+            token_type_ids=token_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=input_embs,
@@ -2085,16 +2086,17 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
         # print(labels)
         # print(seq_relationship_scores.shape)
         if labels is not None:
-            # TODO：修改损失函数
-            next_sentence_loss = self.loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
+            next_sentence_loss = self.loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1))
 
         if not return_dict: # 大概是这个分支永远进不去，所以这个编译上的问题就放这无所谓了
             output = (seq_relationship_scores,) + outputs[2:]
             return ((next_sentence_loss,) + output) if next_sentence_loss is not None else output
+        
 
         return NextSentencePredictorOutput(
             loss=next_sentence_loss,
-            logits=seq_relationship_scores,
+            ids=test_ids,
+            logits=seq_relationship_scores, # ids和logits一一对应
             hidden_states=hidden_states,
             attentions=transformer_outputs.attentions,
         )
