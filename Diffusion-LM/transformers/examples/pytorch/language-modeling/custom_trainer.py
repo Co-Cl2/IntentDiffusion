@@ -1930,19 +1930,19 @@ class Classifier_Consistency(BertPreTrainedModel):# 靠cls判断，按照这个�
 class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句子长度，bert需要两倍的句子长度来分类，这两个无法保持一致 1.bert长度无需定义 2.diffusion长度也无所谓
     _keys_to_ignore_on_load_missing = [r"attn.masked_bias", r"attn.bias", r"lm_head.weight"]
 
-    def __init__(self, config, diffusion=None):
+    def __init__(self, config, anchor_data, diffusion=None):
         super().__init__(config)
         self.bert = BertModel(config)
         self.bert.embeddings.word_embeddings = nn.Embedding(config.vocab_size, config.input_emb_dim, )
-
+        self.anchor_data = anchor_data
         ################# W1,b1 ################# 使用了现有的NSP层，可以实现需要的功能
         self.cls = BertOnlyNSPHead(config)
-
+        self.epsilon = 0.1
         self.up_proj = nn.Sequential(nn.Linear(config.input_emb_dim, config.input_emb_dim * 4), nn.Tanh(),
                                      nn.Linear(config.input_emb_dim * 4, config.hidden_size)) # RuntimeError: mat1 and mat2 shapes cannot be multiplied (160x128 and 16x64) input_emb_dim 是 16,应该设为128
         
         ################# 评估模式 #################
-        # self.bert.eval() # TODO：bert参数需要更新吗
+        self.bert.eval() # TODO：bert参数需要更新吗
         
         print(diffusion)
         self.diffusion = diffusion
@@ -1967,6 +1967,15 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
+
+    def loss_fct(self, pre, label):
+        labels = [ [1-self.epsilon, self.epsilon] if x == 1 else [self.epsilon, 1-self.epsilon] for x in label ]
+        labels = torch.tensor(labels)
+        labels = labels.to(pre.device)
+        loss = F.kl_div(torch.log(labels), torch.softmax(pre, dim=-1), reduction='mean')
+        # print(torch.log(labels), torch.softmax(pre, dim=-1),loss)
+        return loss
+    
 
     def forward( # 这个环境使用的是一个连续的句子，无论训练还是测试都是用type_ids来标识X1，X2
             self,
@@ -2076,8 +2085,8 @@ class Classifier_Anchor(BertPreTrainedModel):# diffusion长度仅仅是一个句
         # print(labels)
         # print(seq_relationship_scores.shape)
         if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
+            # TODO：修改损失函数
+            next_sentence_loss = self.loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1)) # 交叉熵损失函数中完成了softmax这一步 TODO：完成label-smooth部分，论文中的损失函数到底是什么样的
 
         if not return_dict: # 大概是这个分支永远进不去，所以这个编译上的问题就放这无所谓了
             output = (seq_relationship_scores,) + outputs[2:]

@@ -671,7 +671,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             train_dataset = list(zip(*train_dataset))
             train_datasets = Dataset.from_dict({'text': train_dataset[0],'label': train_dataset[1]})
             test_dataset = list(zip(*test_dataset)) 
-            test_datasets = Dataset.from_dict({'text': test_dataset[0][:50],'label': test_dataset[1][:50]})# TODO: 暂时如此，验证集是测试集中选出50条自组队
+            test_datasets = Dataset.from_dict({'text': test_dataset[0],'label': test_dataset[1]})
         else:
             train_datasets = Dataset.from_dict({'text': train_dataset["text"]})
         raw_datasets = datasets.DatasetDict({'train': train_datasets, 'test': test_datasets})
@@ -951,7 +951,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
             elif model_args.experiment == 'e2e-back':
                 model = Classifier_GPT2(config=config, diffusion=diffusion,)
             elif model_args.experiment == 'intent':
-                model = Classifier_Anchor(config=config, diffusion=diffusion,)# TODO：训练过程中需要扩散吗
+                model = Classifier_Anchor(config=config, diffusion=diffusion, anchor_data=raw_datasets['train'])# TODO：训练过程中需要扩散吗
             elif model_args.experiment == 'e2e-tgt-pos':
                 config.pos_vocab_size = len(pos_vocab)
                 model = Classifier_POS(config=config, diffusion=diffusion, )
@@ -1522,25 +1522,33 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
-        def pad_function(group_lst):# 最后还是外面组成句子对再padding，没有关系，推理的时候组成句子对输入然后再出来取损失的平均就行 TODO：损失函数的公式究竟是怎么实现的，要不要问一下写这篇论文的学长
+            model.anchor_data = model.anchor_data.map(
+                tokenize_function,
+                batched=True,
+                num_proc=1,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on dataset",
+            )
+        def pad_function(group_lst):
             if model_args.experiment == 'intent':
                 vocab_dict = raw_datasets.vocab
                 max_length = 64 # 64
                 seqlen = 64 # 64
-                group_lst['anchors'] = group_lst['input_ids']
-                group_lst['anchors_labels'] = group_lst['labels']
+                anchors = model.anchor_data['input_ids']
+                anchors_labels = model.anchor_data['labels']
+                batched_input_ids = group_lst['input_ids']
+                batched_labels = group_lst['labels']
                 
-                group_lst['input_ids'] = [ [0] + x + y for x in group_lst['anchors'] for y in group_lst['anchors']]
+                group_lst['input_ids'] = [ [0] + x + y for x in batched_input_ids for y in anchors]
                 
                 group_lst['input_ids'] = _collate_batch_helper(group_lst['input_ids'], vocab_dict['PAD'], max_length)
 
-                group_lst['labels'] = [int(x == y) for x in group_lst['anchors_labels'] for y in group_lst['anchors_labels']] # 同类为1，异类为0
+                group_lst['labels'] = [int(x == y) for x in batched_labels for y in anchors_labels] # 同类为1，异类为0
 
-                group_lst['type_ids'] = [ [0] * len(x) + [1] * (len(y)-1) for x in group_lst['anchors'] for y in group_lst['anchors']]
+                group_lst['type_ids'] = [ [0] * len(x) + [1] * (len(y)-1) for x in batched_input_ids for y in anchors]
                 group_lst['type_ids'] = _collate_batch_helper(group_lst['type_ids'], 2, max_length)
 
-                group_lst.pop('anchors', None)
-                group_lst.pop('anchors_labels', None)
 
             elif model_args.experiment == 'e2e-back-gen':
                 group_lst['labels'] = group_lst['input_ids']
@@ -1573,6 +1581,7 @@ def main(): # 仍然需要anchor_data，因为默认训练分类器的数据集�
                 num_proc=1,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
+        lm_datasets = lm_datasets.shuffle()
 
     elif model_args.experiment.startswith('pos'):
         def tokenize_function(examples):
